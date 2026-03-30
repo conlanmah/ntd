@@ -4,10 +4,9 @@ This document explores how ntd can bridge Terraform infrastructure and NixOS con
 
 ## Problem Statement
 
-Existing tools require one of:
+Existing tools require tight coupling:
 - **Terranix**: Rewrite Terraform in Nix (couples format to Nix)
 - **terraform-nixos modules**: Embed NixOS deployment in Terraform (couples deployment to TF)
-- **Colmena/deploy-rs**: Pure NixOS tools with no Terraform awareness (manual inventory)
 
 **Goal**: A thin coordination layer that reads from both systems without requiring structural changes to either.
 
@@ -142,7 +141,7 @@ Step 3/5: Terraform apply
   → IP: 192.168.1.15
 
 Step 4/5: Bootstrap NixOS
-  → Running nixos-anywhere...
+  → Installing NixOS on target...
 
 Step 5/5: Deploy configuration
   → Activating nixosConfigurations.webserver
@@ -190,9 +189,6 @@ path = "./nixos"
 configurations = "nixosConfigurations"
 
 [defaults]
-# Default deployment method
-deploy_method = "nixos-rebuild"  # or "colmena", "deploy-rs"
-
 # SSH settings
 ssh_user = "root"
 ssh_key = "~/.ssh/id_ed25519"
@@ -259,15 +255,29 @@ For users who want deeper integration:
 
 ## Deployment Methods
 
-ntd supports multiple deployment backends:
+ntd uses a **pluggable deployer architecture** designed for future extensibility.
+
+### Current Implementation (Built-in)
+
+The initial implementation uses direct SSH and `nixos-rebuild`:
 
 | Method | Use Case | Parallel | Rollback |
 |--------|----------|----------|----------|
-| `nixos-rebuild --target-host` | Simple, single host | No | Manual |
-| `colmena` | Fleet deployment | Yes | Yes |
-| `deploy-rs` | Multi-profile | Yes | Yes |
+| `builtin` (default) | Simple, single host | No | Manual |
 
-User chooses based on their needs. ntd wraps the chosen method.
+This keeps dependencies minimal and the codebase simple for early development.
+
+### Future Backends (Planned)
+
+The deployer interface is designed to accommodate these tools later if needed:
+
+| Method | Use Case | When to Add |
+|--------|----------|-------------|
+| `colmena` | Fleet deployment with parallel/rollback | When managing 5+ hosts |
+| `deploy-rs` | Multi-profile deployments | When needing advanced profiles |
+| `nixos-anywhere` | Fresh installs from scratch | When automating initial provisioning |
+
+These are not immediate dependencies - the architecture simply ensures we can swap them in without major refactoring.
 
 ## State Management
 
@@ -299,25 +309,24 @@ Benefits:
 ### Phase 3: Provisioning
 - `ntd provision` - Create new hosts
 - Templates for Proxmox VMs/LXC
-- nixos-anywhere integration
 
 ### Phase 4: Advanced Deployment
-- Colmena/deploy-rs backends
 - Parallel deployment
 - Rollback support
 
 ## Technology Choices
 
-**Language**: Rust or Go
-- Both have good Nix ecosystem tooling
-- Rust: Better CLI libraries (clap), matches Colmena
-- Go: Faster compilation, matches Terraform
+**Language**: Python
+- Rapid prototyping for an evolving design
+- Rich ecosystem for CLI (click/typer), SSH (paramiko/fabric), and config parsing
+- All dependencies provided via `flake.nix` devShell - no pip/virtualenv complexity
+- Easy for homelab users to modify and contribute
 
-**Dependencies**:
+**Dependencies** (provided via `flake.nix`):
+- Python 3.11+ with libraries (click, paramiko, rich, tomli)
 - Terraform CLI (shelling out)
-- Nix CLI (shelling out, or nix crate for Rust)
+- Nix CLI (shelling out)
 - sops CLI (for secrets)
-- SSH (for deployment)
 
 ## Example Workflow
 
@@ -345,8 +354,12 @@ ntd apply --all
 ## References
 
 - [Deploying NixOS using Terraform](https://nix.dev/tutorials/nixos/deploying-nixos-using-terraform.html)
-- [Colmena](https://github.com/zhaofengli/colmena)
-- [deploy-rs](https://serokell.io/blog/deploy-rs)
-- [Terranix](https://terranix.org/)
-- [terraform-nixos](https://github.com/nix-community/terraform-nixos)
 - [Declarative deployment with Terraform and Nix](https://jonascarpay.com/posts/2022-09-19-declarative-deployment.html)
+
+### Future Integration References
+
+These tools may be integrated as deployment backends later:
+
+- [Colmena](https://github.com/zhaofengli/colmena) - parallel deployment, rollback
+- [deploy-rs](https://github.com/serokell/deploy-rs) - multi-profile deployments
+- [nixos-anywhere](https://github.com/nix-community/nixos-anywhere) - fresh installs via SSH
