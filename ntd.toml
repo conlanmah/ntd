@@ -1,0 +1,11 @@
+# ntd configuration
+terraform_path = "/home/conlan/Documents/homelab-repos/homelab/terraform"
+nixos_path = "/home/conlan/Documents/homelab-repos/homelab/nix-flakes/services"
+ssh_user = "conlan"
+ssh_key = "/home/conlan/.ssh/id_ed25519"
+
+[[hosts]]
+name = "nix-ct-test-02"
+terraform_resource = "nix-ct-test-02"
+terraform_ip_output = "ipv4_address"
+nixos_configuration = "nix-ct-test-02"

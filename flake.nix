@@ -8,11 +8,23 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
   };
 
-  # Chat GPT created with minimal packages required for building 
+  # Chat GPT created with minimal packages required for building
   # Use the ++ syntax to extend packages per each devShell, other
   # wise, the 'commonPackages' variable contains packages shared
   # across both x86 and aarch architectures
  outputs = { self, nixpkgs, ... }: let
+    # Python with dependencies for ntd CLI
+    getPython = pkgs: pkgs.python311.withPackages (ps: with ps; [
+      click        # CLI framework
+      rich         # Pretty terminal output
+      pytest       # Testing
+    ]);
+
+    # Wrapper script to run ntd as a command
+    makeNtdWrapper = pkgs: pkgs.writeShellScriptBin "ntd" ''
+      exec ${getPython pkgs}/bin/python -m ntd "$@"
+    '';
+
     # Shared base package list
     getBasePackages = pkgs: with pkgs; [
       nix
@@ -20,6 +32,8 @@
       nixos-generators # for creating lxc tar
       openssh
       terraform
+      (getPython pkgs)
+      (makeNtdWrapper pkgs)
     ];
 
     # Shared shellHook generator

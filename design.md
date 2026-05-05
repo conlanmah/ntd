@@ -70,6 +70,9 @@ NixOS configurations:
 Create mapping? [Y/n]
 ```
 
+Should check for existing ntd.toml and either modify or recreate based on user input.
+
+
 ### `ntd inventory`
 
 Shows current state by querying both systems:
