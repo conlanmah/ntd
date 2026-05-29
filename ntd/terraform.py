@@ -1,6 +1,7 @@
 """Terraform integration for ntd."""
 
 import json
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -47,7 +48,7 @@ def get_outputs(tf_path: Path) -> dict[str, Any]:
 
     try:
         result = subprocess.run(
-            ["terraform", f"-chdir={tf_path}", "output", "-json"],
+            ["terraform", f"-chdir={tf_path}", "output", "-no-color", "-json"],
             capture_output=True,
             text=True,
             check=True,
@@ -151,7 +152,7 @@ def plan(tf_path: Path, target: Optional[str] = None) -> TerraformPlan:
     # Create a temporary file for the plan
     plan_file = tf_path / ".ntd-plan"
 
-    cmd = ["terraform", f"-chdir={tf_path}", "plan", "-input=false", "-out", str(plan_file), "-detailed-exitcode"]
+    cmd = ["terraform", f"-chdir={tf_path}", "plan", "-no-color", "-input=false", "-out", str(plan_file), "-detailed-exitcode"]
     if target:
         cmd.extend(["-target", target])
 
@@ -163,7 +164,16 @@ def plan(tf_path: Path, target: Optional[str] = None) -> TerraformPlan:
         )
         # Exit codes: 0 = no changes, 1 = error, 2 = changes present
         if result.returncode == 1:
-            raise TerraformError(f"terraform plan failed: {result.stderr}")
+            stderr = result.stderr
+            if "No value for required variable" in stderr:
+                match = re.search(r'variable "([^"]+)"', stderr)
+                var_name = match.group(1) if match else "unknown"
+                raise TerraformError(
+                    f"Missing required terraform variable: {var_name}\n"
+                    f"Set it via environment variable: export TF_VAR_{var_name}=<value>\n"
+                    f"Or create terraform/secrets.auto.tfvars"
+                )
+            raise TerraformError(f"terraform plan failed: {stderr}")
 
         has_changes = result.returncode == 2
 
@@ -176,7 +186,7 @@ def plan(tf_path: Path, target: Optional[str] = None) -> TerraformPlan:
     # Parse the plan to categorize changes
     try:
         show_result = subprocess.run(
-            ["terraform", f"-chdir={tf_path}", "show", "-json", str(plan_file)],
+            ["terraform", f"-chdir={tf_path}", "show", "-no-color", "-json", str(plan_file)],
             capture_output=True,
             text=True,
             check=True,
@@ -232,7 +242,7 @@ def apply(tf_path: Path, plan_file: Optional[Path] = None, auto_approve: bool = 
     if not tf_path.exists():
         raise TerraformError(f"Terraform directory not found: {tf_path}")
 
-    cmd = ["terraform", f"-chdir={tf_path}", "apply"]
+    cmd = ["terraform", f"-chdir={tf_path}", "apply", "-no-color"]
 
     if plan_file and plan_file.exists():
         cmd.append(str(plan_file))

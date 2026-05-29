@@ -38,7 +38,6 @@
 
     # Shared shellHook generator
     makeShellHook = system: ''
-      export
       echo "✅ Nix deploy shell ready for ${system}"
     '';
   in {
