@@ -151,7 +151,7 @@ def plan(tf_path: Path, target: Optional[str] = None) -> TerraformPlan:
     # Create a temporary file for the plan
     plan_file = tf_path / ".ntd-plan"
 
-    cmd = ["terraform", f"-chdir={tf_path}", "plan", "-out", str(plan_file), "-detailed-exitcode"]
+    cmd = ["terraform", f"-chdir={tf_path}", "plan", "-input=false", "-out", str(plan_file), "-detailed-exitcode"]
     if target:
         cmd.extend(["-target", target])
 
