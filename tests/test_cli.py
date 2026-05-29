@@ -155,10 +155,13 @@ class TestApplyCommand:
     @patch("ntd.cli.build_configuration")
     @patch("ntd.cli.get_host_ip")
     @patch("ntd.cli.get_outputs")
+    @patch("ntd.cli.tf_plan")
     @patch("ntd.cli.load_config")
     def test_apply_success(
-        self, mock_load, mock_outputs, mock_get_ip, mock_build, mock_deploy, runner, tmp_path
+        self, mock_load, mock_tf_plan, mock_outputs, mock_get_ip, mock_build, mock_deploy, runner, tmp_path
     ):
+        from ntd.terraform import TerraformPlan
+
         mock_load.return_value = Config(
             terraform_path=Path("./terraform"),
             nixos_path=Path("."),
@@ -173,6 +176,7 @@ class TestApplyCommand:
                 )
             ],
         )
+        mock_tf_plan.return_value = TerraformPlan(has_changes=False)
         mock_outputs.return_value = {"vm1_ip": "192.168.1.100"}
         mock_get_ip.return_value = "192.168.1.100"
         mock_build.return_value = Path("/nix/store/abc123-nixos-system")

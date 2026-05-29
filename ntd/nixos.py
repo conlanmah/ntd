@@ -1,6 +1,7 @@
 """NixOS integration for ntd."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -97,6 +98,9 @@ def copy_closure(store_path: Path, host_ip: str, ssh_user: str, ssh_key: Path) -
     ssh_target = f"ssh://{ssh_user}@{host_ip}"
     ssh_opts = f"-o StrictHostKeyChecking=accept-new -i {ssh_key}"
 
+    env = os.environ.copy()
+    env["NIX_SSHOPTS"] = ssh_opts
+
     try:
         subprocess.run(
             [
@@ -106,7 +110,7 @@ def copy_closure(store_path: Path, host_ip: str, ssh_user: str, ssh_key: Path) -
                 ssh_target,
                 str(store_path),
             ],
-            env={"NIX_SSHOPTS": ssh_opts},
+            env=env,
             capture_output=True,
             text=True,
             check=True,

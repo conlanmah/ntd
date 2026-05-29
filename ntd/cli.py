@@ -10,7 +10,17 @@ from rich.table import Table
 from ntd.config import Config, ConfigError, Host, find_host, load_config, save_config
 from ntd.inventory import get_inventory
 from ntd.nixos import NixOSError, build_configuration, deploy, list_configurations
-from ntd.terraform import TerraformError, flatten_outputs, get_host_ip, get_outputs
+from ntd.ssh import wait_for_ssh
+from ntd.terraform import (
+    TerraformError,
+    TerraformPlan,
+    apply as tf_apply,
+    cleanup_plan,
+    flatten_outputs,
+    get_host_ip,
+    get_outputs,
+    plan as tf_plan,
+)
 
 console = Console()
 
@@ -209,7 +219,7 @@ def inventory():
 @cli.command()
 @click.argument("host")
 def plan(host: str):
-    """Preview what would be deployed to HOST"""
+    """Preview what would be deployed to HOST (infrastructure + NixOS)"""
     try:
         config = load_config()
     except ConfigError as e:
@@ -224,40 +234,68 @@ def plan(host: str):
             console.print(f"  {h.name}")
         sys.exit(1)
 
-    # Get IP from Terraform
     console.print(f"[bold]Planning deployment for {host}...[/bold]\n")
 
+    # Step 1: Terraform plan
+    console.print("[bold]Step 1: Infrastructure (Terraform)[/bold]")
+    terraform_plan = None
+    try:
+        terraform_plan = tf_plan(config.terraform_path)
+
+        if terraform_plan.has_changes:
+            for r in terraform_plan.creates:
+                console.print(f"  [green]+ {r}[/green]")
+            for r in terraform_plan.updates:
+                console.print(f"  [yellow]~ {r}[/yellow]")
+            for r in terraform_plan.replaces:
+                console.print(f"  [yellow]-/+ {r}[/yellow] (replace)")
+            for r in terraform_plan.destroys:
+                console.print(f"  [red]- {r}[/red] (destroy)")
+
+            if terraform_plan.is_destructive():
+                console.print("\n  [yellow]Warning: Plan contains destructive changes[/yellow]")
+        else:
+            console.print("  No infrastructure changes")
+
+    except TerraformError as e:
+        console.print(f"  [yellow]Warning: Could not run terraform plan: {e}[/yellow]")
+    finally:
+        if terraform_plan:
+            cleanup_plan(terraform_plan)
+
+    # Get current IP from Terraform outputs
     try:
         tf_outputs = get_outputs(config.terraform_path)
         ip = get_host_ip(tf_outputs, host_config.terraform_ip_output)
-    except TerraformError as e:
-        console.print(f"[yellow]Warning: Could not get Terraform outputs: {e}[/yellow]")
+    except TerraformError:
         ip = None
 
-    console.print(f"Host: {host}")
-    console.print(f"NixOS configuration: {host_config.nixos_configuration}")
-    console.print(f"Target IP: {ip or '[unknown]'}")
+    # Step 2: NixOS configuration
+    console.print(f"\n[bold]Step 2: Configuration (NixOS)[/bold]")
+    console.print(f"  Configuration: {host_config.nixos_configuration}")
+    console.print(f"  Target IP: {ip or '[will be determined after terraform apply]'}")
 
-    # Build the configuration
-    console.print(f"\n[bold]Building NixOS configuration...[/bold]")
+    console.print("\n  Building configuration...")
     try:
         store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
-        console.print(f"[green]Build successful![/green]")
-        console.print(f"Store path: {store_path}")
+        console.print(f"  [green]Build successful![/green]")
+        console.print(f"  Store path: {store_path}")
     except NixOSError as e:
-        console.print(f"[red]Build failed: {e}[/red]")
+        console.print(f"  [red]Build failed: {e}[/red]")
         sys.exit(1)
 
-    console.print(f"\n[bold]Would deploy:[/bold]")
-    console.print(f"  {store_path}")
-    console.print(f"  -> {host} ({ip or 'IP unknown'})")
-    console.print("\nRun 'ntd apply {host}' to deploy.")
+    console.print(f"\n[bold]Summary:[/bold]")
+    console.print(f"  Would deploy {store_path}")
+    console.print(f"  -> {host} ({ip or 'IP pending'})")
+    console.print(f"\nRun 'ntd apply {host}' to deploy.")
 
 
 @cli.command()
 @click.argument("host")
-def apply(host: str):
-    """Deploy NixOS configuration to HOST"""
+@click.option("--skip-terraform", is_flag=True, help="Skip terraform apply, only deploy NixOS")
+@click.option("--skip-nixos", is_flag=True, help="Skip NixOS deploy, only run terraform")
+def apply(host: str, skip_terraform: bool, skip_nixos: bool):
+    """Deploy infrastructure and NixOS configuration to HOST"""
     try:
         config = load_config()
     except ConfigError as e:
@@ -269,9 +307,55 @@ def apply(host: str):
         console.print(f"[red]Error: Host '{host}' not found in configuration[/red]")
         sys.exit(1)
 
-    # Get IP from Terraform
-    console.print(f"[bold]Deploying to {host}...[/bold]\n")
+    console.print(f"[bold]Deploying {host}...[/bold]\n")
 
+    # Step 1: Check and apply Terraform changes
+    terraform_applied = False
+    needs_ssh_wait = False
+
+    if not skip_terraform:
+        console.print("[bold]Step 1: Infrastructure (Terraform)[/bold]")
+        try:
+            terraform_plan = tf_plan(config.terraform_path)
+
+            if terraform_plan.has_changes:
+                # Show what will change
+                for r in terraform_plan.creates:
+                    console.print(f"  [green]+ {r}[/green]")
+                for r in terraform_plan.updates:
+                    console.print(f"  [yellow]~ {r}[/yellow]")
+                for r in terraform_plan.replaces:
+                    console.print(f"  [yellow]-/+ {r}[/yellow] (replace)")
+                for r in terraform_plan.destroys:
+                    console.print(f"  [red]- {r}[/red] (destroy)")
+
+                # Confirm destructive changes
+                if terraform_plan.is_destructive():
+                    console.print("\n  [yellow]Warning: Destructive changes detected![/yellow]")
+                    if not click.confirm("  Continue with destructive changes?", default=False):
+                        cleanup_plan(terraform_plan)
+                        console.print("[yellow]Aborted.[/yellow]")
+                        sys.exit(0)
+
+                # Apply terraform
+                console.print("\n  Applying infrastructure changes...")
+                tf_apply(config.terraform_path, plan_file=terraform_plan.plan_file, auto_approve=True)
+                console.print("  [green]Infrastructure updated![/green]")
+                terraform_applied = True
+
+                # Need to wait for SSH if we created or replaced resources
+                needs_ssh_wait = bool(terraform_plan.creates or terraform_plan.replaces)
+                cleanup_plan(terraform_plan)
+            else:
+                console.print("  No infrastructure changes needed")
+
+        except TerraformError as e:
+            console.print(f"  [red]Terraform failed: {e}[/red]")
+            sys.exit(1)
+    else:
+        console.print("[dim]Step 1: Infrastructure (skipped)[/dim]")
+
+    # Get IP from Terraform outputs (refresh after apply)
     try:
         tf_outputs = get_outputs(config.terraform_path)
         ip = get_host_ip(tf_outputs, host_config.terraform_ip_output)
@@ -284,26 +368,40 @@ def apply(host: str):
         console.print(f"Terraform output key: {host_config.terraform_ip_output}")
         sys.exit(1)
 
-    console.print(f"Target: {ip}")
-    console.print(f"NixOS configuration: {host_config.nixos_configuration}")
+    # Step 2: Wait for SSH if infrastructure was created/replaced
+    if needs_ssh_wait:
+        console.print(f"\n[bold]Step 2: Waiting for {host} ({ip}) to become reachable...[/bold]")
+        if not wait_for_ssh(ip, config.ssh_user, config.ssh_key, timeout=120):
+            console.print(f"  [red]Timeout waiting for SSH on {ip}[/red]")
+            sys.exit(1)
+        console.print("  [green]Host is reachable![/green]")
 
-    # Build the configuration
-    console.print(f"\n[bold]Building NixOS configuration...[/bold]")
-    try:
-        store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
-        console.print(f"[green]Build successful![/green]")
-    except NixOSError as e:
-        console.print(f"[red]Build failed: {e}[/red]")
-        sys.exit(1)
+    # Step 3: Deploy NixOS configuration
+    if not skip_nixos:
+        step_num = "3" if needs_ssh_wait else "2"
+        console.print(f"\n[bold]Step {step_num}: Configuration (NixOS)[/bold]")
+        console.print(f"  Target: {ip}")
+        console.print(f"  Configuration: {host_config.nixos_configuration}")
 
-    # Deploy
-    console.print(f"\n[bold]Copying closure to {host}...[/bold]")
-    try:
-        deploy(store_path, ip, config.ssh_user, config.ssh_key)
-        console.print(f"\n[green]Successfully deployed to {host}![/green]")
-    except NixOSError as e:
-        console.print(f"[red]Deployment failed: {e}[/red]")
-        sys.exit(1)
+        console.print("\n  Building configuration...")
+        try:
+            store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
+            console.print("  [green]Build successful![/green]")
+        except NixOSError as e:
+            console.print(f"  [red]Build failed: {e}[/red]")
+            sys.exit(1)
+
+        console.print(f"\n  Copying closure to {host}...")
+        try:
+            deploy(store_path, ip, config.ssh_user, config.ssh_key)
+            console.print("  [green]Configuration deployed![/green]")
+        except NixOSError as e:
+            console.print(f"  [red]Deployment failed: {e}[/red]")
+            sys.exit(1)
+    else:
+        console.print("\n[dim]Step 2: Configuration (skipped)[/dim]")
+
+    console.print(f"\n[green]Successfully deployed {host}![/green]")
 
 
 if __name__ == "__main__":
