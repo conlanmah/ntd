@@ -217,26 +217,25 @@ def inventory():
 
 
 @cli.command()
-@click.argument("host")
-def plan(host: str):
-    """Preview what would be deployed to HOST (infrastructure + NixOS)"""
+@click.argument("host", required=False, default=None)
+def plan(host: str | None):
+    """Preview deployment changes. Without HOST, shows terraform + all NixOS configs. With HOST, shows that host's NixOS config only."""
     try:
         config = load_config()
     except ConfigError as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
 
-    host_config = find_host(config, host)
-    if not host_config:
-        console.print(f"[red]Error: Host '{host}' not found in configuration[/red]")
-        console.print("Available hosts:")
-        for h in config.hosts:
-            console.print(f"  {h.name}")
-        sys.exit(1)
+    if host is None:
+        _plan_all(config)
+    else:
+        _plan_host(config, host)
 
-    console.print(f"[bold]Planning deployment for {host}...[/bold]\n")
 
-    # Step 1: Terraform plan
+def _plan_all(config):
+    console.print("[bold]Planning full deployment...[/bold]\n")
+
+    # Step 1: Terraform plan (soft failure — plan is preview only)
     console.print("[bold]Step 1: Infrastructure (Terraform)[/bold]")
     terraform_plan = None
     try:
@@ -263,22 +262,47 @@ def plan(host: str):
         if terraform_plan:
             cleanup_plan(terraform_plan)
 
-    # Get current IP from Terraform outputs
+    # Step 2: NixOS configurations for all hosts
+    console.print(f"\n[bold]Step 2: Configurations (NixOS)[/bold]")
+    for host_config in config.hosts:
+        console.print(f"\n  Building {host_config.nixos_configuration} ({host_config.name})...")
+        try:
+            store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
+            console.print(f"  [green]{host_config.name}: {store_path}[/green]")
+        except NixOSError as e:
+            console.print(f"  [red]{host_config.name}: Build failed: {e}[/red]")
+            sys.exit(1)
+
+    console.print(f"\nRun 'ntd apply' to deploy all hosts.")
+
+
+def _plan_host(config, host: str):
+    host_config = find_host(config, host)
+    if not host_config:
+        console.print(f"[red]Error: Host '{host}' not found in configuration[/red]")
+        console.print("Available hosts:")
+        for h in config.hosts:
+            console.print(f"  {h.name}")
+        sys.exit(1)
+
+    console.print(f"[bold]Planning deployment for {host}...[/bold]\n")
+
+    # Get current IP from Terraform outputs for display only
     try:
         tf_outputs = get_outputs(config.terraform_path)
         ip = get_host_ip(tf_outputs, host_config.terraform_ip_output)
     except TerraformError:
         ip = None
 
-    # Step 2: NixOS configuration
-    console.print(f"\n[bold]Step 2: Configuration (NixOS)[/bold]")
+    # Step 1: NixOS configuration only (terraform is not run for host-specific plan)
+    console.print("[bold]Step 1: Configuration (NixOS)[/bold]")
     console.print(f"  Configuration: {host_config.nixos_configuration}")
     console.print(f"  Target IP: {ip or '[will be determined after terraform apply]'}")
 
     console.print("\n  Building configuration...")
     try:
         store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
-        console.print(f"  [green]Build successful![/green]")
+        console.print("  [green]Build successful![/green]")
         console.print(f"  Store path: {store_path}")
     except NixOSError as e:
         console.print(f"  [red]Build failed: {e}[/red]")
@@ -291,35 +315,36 @@ def plan(host: str):
 
 
 @cli.command()
-@click.argument("host")
-@click.option("--skip-terraform", is_flag=True, help="Skip terraform apply, only deploy NixOS")
-@click.option("--skip-nixos", is_flag=True, help="Skip NixOS deploy, only run terraform")
-def apply(host: str, skip_terraform: bool, skip_nixos: bool):
-    """Deploy infrastructure and NixOS configuration to HOST"""
+@click.argument("host", required=False, default=None)
+@click.option("--skip-terraform", is_flag=True, help="Skip terraform apply (no-args path only)")
+@click.option("--skip-nixos", is_flag=True, help="Skip NixOS deploy (no-args path only)")
+def apply(host: str | None, skip_terraform: bool, skip_nixos: bool):
+    """Deploy infrastructure and NixOS. Without HOST, runs terraform + deploys all hosts. With HOST, deploys NixOS to that host only (no terraform)."""
     try:
         config = load_config()
     except ConfigError as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
 
-    host_config = find_host(config, host)
-    if not host_config:
-        console.print(f"[red]Error: Host '{host}' not found in configuration[/red]")
-        sys.exit(1)
+    if host is None:
+        _apply_all(config, skip_terraform, skip_nixos)
+    else:
+        _apply_host(config, host, skip_terraform, skip_nixos)
 
-    console.print(f"[bold]Deploying {host}...[/bold]\n")
 
-    # Step 1: Check and apply Terraform changes
-    terraform_applied = False
-    needs_ssh_wait = False
+def _apply_all(config, skip_terraform: bool, skip_nixos: bool):
+    console.print("[bold]Deploying all hosts...[/bold]\n")
 
+    creates_set: set[str] = set()
+    replaces_set: set[str] = set()
+
+    # Step 1: Terraform
     if not skip_terraform:
         console.print("[bold]Step 1: Infrastructure (Terraform)[/bold]")
         try:
             terraform_plan = tf_plan(config.terraform_path)
 
             if terraform_plan.has_changes:
-                # Show what will change
                 for r in terraform_plan.creates:
                     console.print(f"  [green]+ {r}[/green]")
                 for r in terraform_plan.updates:
@@ -329,7 +354,6 @@ def apply(host: str, skip_terraform: bool, skip_nixos: bool):
                 for r in terraform_plan.destroys:
                     console.print(f"  [red]- {r}[/red] (destroy)")
 
-                # Confirm destructive changes
                 if terraform_plan.is_destructive():
                     console.print("\n  [yellow]Warning: Destructive changes detected![/yellow]")
                     if not click.confirm("  Continue with destructive changes?", default=False):
@@ -337,14 +361,12 @@ def apply(host: str, skip_terraform: bool, skip_nixos: bool):
                         console.print("[yellow]Aborted.[/yellow]")
                         sys.exit(0)
 
-                # Apply terraform
                 console.print("\n  Applying infrastructure changes...")
                 tf_apply(config.terraform_path, plan_file=terraform_plan.plan_file, auto_approve=True)
                 console.print("  [green]Infrastructure updated![/green]")
-                terraform_applied = True
 
-                # Need to wait for SSH if we created or replaced resources
-                needs_ssh_wait = bool(terraform_plan.creates or terraform_plan.replaces)
+                creates_set = set(terraform_plan.creates)
+                replaces_set = set(terraform_plan.replaces)
                 cleanup_plan(terraform_plan)
             else:
                 console.print("  No infrastructure changes needed")
@@ -355,7 +377,80 @@ def apply(host: str, skip_terraform: bool, skip_nixos: bool):
     else:
         console.print("[dim]Step 1: Infrastructure (skipped)[/dim]")
 
-    # Get IP from Terraform outputs (refresh after apply)
+    # Step 2: NixOS for all hosts
+    if not skip_nixos:
+        console.print(f"\n[bold]Step 2: Deploying NixOS configurations[/bold]")
+
+        try:
+            tf_outputs = get_outputs(config.terraform_path)
+        except TerraformError as e:
+            console.print(f"[red]Error: Could not get Terraform outputs: {e}[/red]")
+            sys.exit(1)
+
+        for host_config in config.hosts:
+            ip = get_host_ip(tf_outputs, host_config.terraform_ip_output)
+            if not ip:
+                console.print(f"[red]Error: Could not determine IP for {host_config.name}[/red]")
+                console.print(f"  Terraform output key: {host_config.terraform_ip_output}")
+                sys.exit(1)
+
+            # Check if this host was newly created or replaced — if so, wait for SSH.
+            # The terraform_resource field may or may not include the resource type prefix
+            # (e.g. "vm1" vs "proxmox_lxc.vm1"), so we check both exact match and suffix.
+            all_changed = creates_set | replaces_set
+            needs_ssh_wait = any(
+                addr == host_config.terraform_resource or addr.endswith("." + host_config.terraform_resource)
+                for addr in all_changed
+            )
+
+            if needs_ssh_wait:
+                console.print(f"\n  Waiting for {host_config.name} ({ip}) to become reachable...")
+                success, error_type = wait_for_ssh(ip, config.ssh_user, config.ssh_key, timeout=120)
+                if not success:
+                    if error_type == "host_key_changed":
+                        console.print(f"  [red]SSH host key has changed for {ip}[/red]")
+                        console.print("  To fix, remove the old key:")
+                        console.print(f"    ssh-keygen -R {ip}")
+                        console.print(f"\n  Then re-run: ntd apply")
+                    else:
+                        console.print(f"  [red]Timeout waiting for SSH on {ip}[/red]")
+                    sys.exit(1)
+                console.print(f"  [green]{host_config.name} is reachable![/green]")
+
+            console.print(f"\n  [{host_config.name}] Building {host_config.nixos_configuration}...")
+            try:
+                store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
+            except NixOSError as e:
+                console.print(f"  [red][{host_config.name}] Build failed: {e}[/red]")
+                sys.exit(1)
+
+            try:
+                deploy(store_path, ip, config.ssh_user, config.ssh_key)
+                console.print(f"  [green][{host_config.name}] Deployed successfully![/green]")
+            except NixOSError as e:
+                console.print(f"  [red][{host_config.name}] Deployment failed: {e}[/red]")
+                sys.exit(1)
+    else:
+        console.print("\n[dim]Step 2: NixOS deployments (skipped)[/dim]")
+
+    console.print(f"\n[green]All hosts deployed successfully![/green]")
+
+
+def _apply_host(config, host: str, skip_terraform: bool, skip_nixos: bool):
+    if skip_terraform or skip_nixos:
+        console.print("[yellow]Warning: --skip-terraform and --skip-nixos are ignored when a host is specified[/yellow]")
+
+    host_config = find_host(config, host)
+    if not host_config:
+        console.print(f"[red]Error: Host '{host}' not found in configuration[/red]")
+        console.print("Available hosts:")
+        for h in config.hosts:
+            console.print(f"  {h.name}")
+        sys.exit(1)
+
+    console.print(f"[bold]Deploying {host}...[/bold]\n")
+
+    # Get IP from Terraform outputs
     try:
         tf_outputs = get_outputs(config.terraform_path)
         ip = get_host_ip(tf_outputs, host_config.terraform_ip_output)
@@ -368,46 +463,26 @@ def apply(host: str, skip_terraform: bool, skip_nixos: bool):
         console.print(f"Terraform output key: {host_config.terraform_ip_output}")
         sys.exit(1)
 
-    # Step 2: Wait for SSH if infrastructure was created/replaced
-    if needs_ssh_wait:
-        console.print(f"\n[bold]Step 2: Waiting for {host} ({ip}) to become reachable...[/bold]")
-        success, error_type = wait_for_ssh(ip, config.ssh_user, config.ssh_key, timeout=120)
-        if not success:
-            if error_type == "host_key_changed":
-                console.print(f"  [red]SSH host key has changed for {ip}[/red]")
-                console.print("  This happens when a host is replaced with new infrastructure.")
-                console.print("\n  To fix, remove the old key:")
-                console.print(f"    ssh-keygen -R {ip}")
-                console.print(f"\n  Then re-run: ntd apply {host}")
-            else:
-                console.print(f"  [red]Timeout waiting for SSH on {ip}[/red]")
-            sys.exit(1)
-        console.print("  [green]Host is reachable![/green]")
+    # Step 1: NixOS only (terraform is not run for host-specific apply)
+    console.print("[bold]Step 1: Configuration (NixOS)[/bold]")
+    console.print(f"  Target: {ip}")
+    console.print(f"  Configuration: {host_config.nixos_configuration}")
 
-    # Step 3: Deploy NixOS configuration
-    if not skip_nixos:
-        step_num = "3" if needs_ssh_wait else "2"
-        console.print(f"\n[bold]Step {step_num}: Configuration (NixOS)[/bold]")
-        console.print(f"  Target: {ip}")
-        console.print(f"  Configuration: {host_config.nixos_configuration}")
+    console.print("\n  Building configuration...")
+    try:
+        store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
+        console.print("  [green]Build successful![/green]")
+    except NixOSError as e:
+        console.print(f"  [red]Build failed: {e}[/red]")
+        sys.exit(1)
 
-        console.print("\n  Building configuration...")
-        try:
-            store_path = build_configuration(config.nixos_path, host_config.nixos_configuration)
-            console.print("  [green]Build successful![/green]")
-        except NixOSError as e:
-            console.print(f"  [red]Build failed: {e}[/red]")
-            sys.exit(1)
-
-        console.print(f"\n  Copying closure to {host}...")
-        try:
-            deploy(store_path, ip, config.ssh_user, config.ssh_key)
-            console.print("  [green]Configuration deployed![/green]")
-        except NixOSError as e:
-            console.print(f"  [red]Deployment failed: {e}[/red]")
-            sys.exit(1)
-    else:
-        console.print("\n[dim]Step 2: Configuration (skipped)[/dim]")
+    console.print(f"\n  Copying closure to {host}...")
+    try:
+        deploy(store_path, ip, config.ssh_user, config.ssh_key)
+        console.print("  [green]Configuration deployed![/green]")
+    except NixOSError as e:
+        console.print(f"  [red]Deployment failed: {e}[/red]")
+        sys.exit(1)
 
     console.print(f"\n[green]Successfully deployed {host}![/green]")
 
