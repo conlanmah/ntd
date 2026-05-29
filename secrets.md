@@ -229,6 +229,65 @@ packages = with pkgs; [
 ];
 ```
 
+## SSH Known Hosts Inventory (Future)
+
+When `ntd apply` creates or replaces hosts, the SSH host key changes. This causes SSH to fail with "REMOTE HOST IDENTIFICATION HAS CHANGED" if the old key exists in `~/.ssh/known_hosts`.
+
+### Current Behavior
+
+ntd uses `StrictHostKeyChecking=accept-new` which:
+- Accepts keys for genuinely new hosts (no entry in known_hosts)
+- Fails for replaced hosts where the old key exists
+
+When this happens, ntd detects the failure and tells the user to run:
+```bash
+ssh-keygen -R <ip>
+```
+
+### Future: Automatic Host Key Management
+
+A secrets inventory could automatically manage known_hosts:
+
+```
+secrets/
+├── host-keys/
+│   ├── vm1.pub        # SSH host public keys (can be plaintext)
+│   ├── vm2.pub
+│   └── inventory.yaml # Maps hostname -> IP -> expected pubkey
+```
+
+**inventory.yaml format:**
+```yaml
+hosts:
+  vm1:
+    ip: 192.168.1.100
+    ssh_host_key: "ssh-ed25519 AAAA..."
+    last_provisioned: 2026-05-28T10:30:00Z
+  vm2:
+    ip: 192.168.1.101
+    ssh_host_key: "ssh-ed25519 AAAA..."
+    last_provisioned: 2026-05-20T14:15:00Z
+```
+
+**Workflow for `ntd apply` with inventory:**
+
+1. Before SSH, check if host is being created/replaced
+2. If replaced, remove old known_hosts entry automatically
+3. After first successful SSH, capture and store the new host key
+4. Update inventory.yaml with new key and timestamp
+5. Optionally commit inventory changes to git
+
+**Benefits:**
+- No manual `ssh-keygen -R` needed
+- Host keys tracked in version control
+- Can verify host authenticity against known keys
+- Audit trail of when hosts were provisioned
+
+**Integration with SOPS:**
+- Public host keys don't need encryption (they're public)
+- Could store alongside the encrypted private keys
+- Or maintain a separate plaintext inventory for simplicity
+
 ## References
 
 - [sops-nix](https://github.com/Mic92/sops-nix)
