@@ -12,7 +12,7 @@ def wait_for_ssh(
     key: Path,
     timeout: int = 120,
     interval: int = 5,
-) -> bool:
+) -> tuple[bool, str | None]:
     """Wait for SSH to become available on a host.
 
     Uses exponential backoff starting from the given interval.
@@ -25,22 +25,28 @@ def wait_for_ssh(
         interval: Initial polling interval in seconds.
 
     Returns:
-        True if SSH becomes available, False on timeout.
+        Tuple of (success, error_type) where error_type is:
+        - None if successful
+        - "host_key_changed" if key mismatch (fails fast, no retry)
+        - "timeout" if connection never succeeded
     """
     start_time = time.time()
     current_interval = interval
 
     while time.time() - start_time < timeout:
-        if check_ssh(host, user, key):
-            return True
+        success, error_type = check_ssh(host, user, key)
+        if success:
+            return (True, None)
+        if error_type == "host_key_changed":
+            return (False, "host_key_changed")
 
         time.sleep(current_interval)
         current_interval = min(current_interval * 1.5, 30)
 
-    return False
+    return (False, "timeout")
 
 
-def check_ssh(host: str, user: str, key: Path) -> bool:
+def check_ssh(host: str, user: str, key: Path) -> tuple[bool, str | None]:
     """Check if SSH connection is possible.
 
     Args:
@@ -49,7 +55,10 @@ def check_ssh(host: str, user: str, key: Path) -> bool:
         key: Path to SSH private key.
 
     Returns:
-        True if SSH connection succeeds, False otherwise.
+        Tuple of (success, error_type) where error_type is:
+        - None if successful
+        - "host_key_changed" if key mismatch
+        - "connection_failed" for other failures
     """
     try:
         result = subprocess.run(
@@ -63,11 +72,20 @@ def check_ssh(host: str, user: str, key: Path) -> bool:
                 "true",
             ],
             capture_output=True,
+            text=True,
             timeout=10,
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            return (True, None)
+
+        if "REMOTE HOST IDENTIFICATION HAS CHANGED" in result.stderr:
+            return (False, "host_key_changed")
+        if "Host key verification failed" in result.stderr:
+            return (False, "host_key_changed")
+
+        return (False, "connection_failed")
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+        return (False, "connection_failed")
 
 
 def check_port(host: str, port: int = 22, timeout: int = 5) -> bool:

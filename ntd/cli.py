@@ -371,8 +371,16 @@ def apply(host: str, skip_terraform: bool, skip_nixos: bool):
     # Step 2: Wait for SSH if infrastructure was created/replaced
     if needs_ssh_wait:
         console.print(f"\n[bold]Step 2: Waiting for {host} ({ip}) to become reachable...[/bold]")
-        if not wait_for_ssh(ip, config.ssh_user, config.ssh_key, timeout=120):
-            console.print(f"  [red]Timeout waiting for SSH on {ip}[/red]")
+        success, error_type = wait_for_ssh(ip, config.ssh_user, config.ssh_key, timeout=120)
+        if not success:
+            if error_type == "host_key_changed":
+                console.print(f"  [red]SSH host key has changed for {ip}[/red]")
+                console.print("  This happens when a host is replaced with new infrastructure.")
+                console.print("\n  To fix, remove the old key:")
+                console.print(f"    ssh-keygen -R {ip}")
+                console.print(f"\n  Then re-run: ntd apply {host}")
+            else:
+                console.print(f"  [red]Timeout waiting for SSH on {ip}[/red]")
             sys.exit(1)
         console.print("  [green]Host is reachable![/green]")
 
