@@ -5,7 +5,13 @@ ssh_user = "root"
 ssh_key = "/home/conlan/.ssh/id_ed25519"
 
 [[hosts]]
-name = "nix-ct-test-02"
-terraform_resource = "nix-ct-test-02"
-terraform_ip_output = "hosts.nix-ct-test-02.ip"
-nixos_configuration = "nix-ct-test-02"
+name = "tailscale"
+terraform_resource = "tailscale"
+terraform_ip_output = "hosts.tailscale.ip"
+nixos_configuration = "tailscale"
+
+#[[hosts]]
+#name = "nix-ct-test-03"
+#terraform_resource = "nix-ct-test-03"
+#terraform_ip_output = "hosts.nix-ct-test-03.ip"
+#nixos_configuration = "nix-ct-test-03"
