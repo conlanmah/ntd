@@ -10,6 +10,12 @@ Existing tools require tight coupling:
 
 **Goal**: A thin coordination layer that reads from both systems without requiring structural changes to either.
 
+## Scope
+
+ntd **coordinates** existing Terraform and NixOS configurations — it does not generate, modify, or scaffold them. The Terraform configuration (resources, providers, variables, outputs) and the NixOS flake (configurations, modules, options) are maintained separately by the user. ntd's job is to read both and orchestrate the deployment lifecycle between them.
+
+This boundary exists because the specific structure of Terraform resources and NixOS configurations is highly homelab-specific and requires deep context that ntd cannot reasonably abstract. Users retain full control over their infrastructure and configuration definitions.
+
 ## Core Concepts
 
 ### Inventory as the Bridge
@@ -81,8 +87,7 @@ Shows current state by querying both systems:
 $ ntd inventory
 HOST      TERRAFORM          NIXOS      IP            STATUS
 vm1       proxmox_vm.vm1     server1    192.168.1.10  deployed
-vm2       proxmox_vm.vm2     server2    192.168.1.11  config-drift
-vm3       proxmox_vm.vm3     -          192.168.1.12  unmanaged
+vm2       proxmox_vm.vm2     server2    192.168.1.11  unreachable
 ```
 
 ### `ntd plan [host]`
@@ -90,65 +95,47 @@ vm3       proxmox_vm.vm3     -          192.168.1.12  unmanaged
 Shows what would change without applying:
 
 ```bash
-$ ntd plan vm1
+$ ntd plan
 Infrastructure (Terraform):
-  No changes
+  + proxmox_vm_qemu.vm3 (create)
 
+Configurations (NixOS):
+  server1: /nix/store/abc123-nixos-system-server1
+  server2: /nix/store/def456-nixos-system-server2
+
+$ ntd plan vm1
 Configuration (NixOS):
-  ~ nginx.conf (modified)
-  + prometheus-node-exporter (added)
-
-Secrets:
-  ~ api-token.sops.yaml (re-encrypted for new host key)
+  server1: /nix/store/abc123-nixos-system-server1
 ```
+
+When called without a host, shows the full terraform plan and builds all NixOS configurations. When called with a host, skips terraform and builds only that host's NixOS configuration.
 
 ### `ntd apply [host]`
 
 Orchestrated deployment:
 
 ```bash
+$ ntd apply
+Step 1: Infrastructure (Terraform)
+  + proxmox_vm_qemu.vm3
+
+Step 2: Deploying NixOS configurations
+  [server1] Building server1...
+  [server1] Deployed successfully!
+  [server2] Building server2...
+  [server2] Deployed successfully!
+
 $ ntd apply vm1
-
-Step 1/4: Terraform apply (if infrastructure changes)
-  → No infrastructure changes
-
-Step 2/4: Build NixOS configuration
-  → Building nixosConfigurations.server1...
-  → /nix/store/abc123-nixos-system-server1
-
-Step 3/4: Deploy secrets
-  → Decrypting secrets/per-host/vm1.sops.yaml
-  → Copying to vm1:/run/secrets
-
-Step 4/4: Activate NixOS
-  → Copying closure to vm1
-  → Activating configuration
-  ✓ Deployed successfully
+Step 1: Configuration (NixOS)
+  Building server1...
+  Deployed successfully!
 ```
 
-### `ntd provision <name>`
+When called without a host, runs terraform apply then deploys NixOS to all hosts. When called with a host, skips terraform and deploys only that host's NixOS configuration.
 
-Creates new infrastructure and bootstraps NixOS:
-
-```bash
-$ ntd provision webserver --template proxmox-vm --nixos server-base
-
-Step 1/5: Generate host SSH key
-  → Created secrets/per-host/webserver.sops.yaml
-
-Step 2/5: Add to Terraform
-  → Generated terraform/hosts/webserver.tf
-
-Step 3/5: Terraform apply
-  → Creating proxmox_vm_qemu.webserver...
-  → IP: 192.168.1.15
-
-Step 4/5: Bootstrap NixOS
-  → Installing NixOS on target...
-
-Step 5/5: Deploy configuration
-  → Activating nixosConfigurations.webserver
-```
+Flags (no-args path only):
+- `--skip-terraform` — deploy NixOS to all hosts without running terraform
+- `--skip-nixos` — run terraform only
 
 ### `ntd secrets`
 
@@ -158,20 +145,6 @@ Manage secrets (wraps sops operations):
 $ ntd secrets rotate webserver --type ssh-key
 $ ntd secrets edit webserver
 $ ntd secrets add webserver api-token
-```
-
-### `ntd destroy <host>`
-
-Coordinated teardown:
-
-```bash
-$ ntd destroy webserver
-This will:
-  - Remove Terraform resources for webserver
-  - Remove secrets/per-host/webserver.sops.yaml
-  - Remove from ntd inventory
-
-Continue? [y/N]
 ```
 
 ## Configuration File
@@ -298,10 +271,11 @@ Benefits:
 
 ## Implementation Approach
 
-### Phase 1: Core CLI
+### Phase 1: Core CLI ✓
 - `ntd init` - Interactive setup
 - `ntd inventory` - Query TF + NixOS
-- `ntd apply` - Deploy using nixos-rebuild
+- `ntd plan [host]` - Preview changes (terraform global, NixOS per-host)
+- `ntd apply [host]` - Deploy (terraform global, NixOS per-host)
 - Config file parsing
 
 ### Phase 2: Secrets Integration
@@ -309,11 +283,7 @@ Benefits:
 - Automatic key provisioning
 - Integration with apply workflow
 
-### Phase 3: Provisioning
-- `ntd provision` - Create new hosts
-- Templates for Proxmox VMs/LXC
-
-### Phase 4: Advanced Deployment
+### Phase 3: Advanced Deployment
 - Parallel deployment
 - Rollback support
 
@@ -341,17 +311,14 @@ ntd init
 
 # Daily operations
 ntd inventory              # See all hosts
-ntd plan vm1               # Preview changes
-ntd apply vm1              # Deploy changes
-
-# Adding a new host
-ntd provision newhost \
-  --terraform-template proxmox-lxc \
-  --nixos-config container-base
+ntd plan                   # Preview all changes (terraform + NixOS)
+ntd apply                  # Deploy everything
+ntd plan vm1               # Preview vm1 NixOS config only
+ntd apply vm1              # Re-deploy vm1 NixOS config only
 
 # Rotating secrets
 ntd secrets rotate --all --max-age 90d
-ntd apply --all
+ntd apply
 ```
 
 ## References
