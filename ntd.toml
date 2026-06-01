@@ -10,6 +10,12 @@ terraform_resource = "tailscale"
 terraform_ip_output = "hosts.tailscale.ip"
 nixos_configuration = "tailscale"
 
+[[hosts]]
+name = "ns1"
+terraform_resource = "ns1"
+terraform_ip_output = "hosts.ns1.ip"
+nixos_configuration = "ns1"
+
 #[[hosts]]
 #name = "nix-ct-test-03"
 #terraform_resource = "nix-ct-test-03"
