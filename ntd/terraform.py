@@ -89,6 +89,8 @@ def get_host_ip(outputs: dict[str, Any], ip_output_key: str) -> Optional[str]:
 
     if isinstance(current, str):
         return current
+    if isinstance(current, list) and current and isinstance(current[0], str):
+        return current[0]
     return None
 
 

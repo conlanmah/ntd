@@ -7,17 +7,23 @@ ssh_key = "/home/conlan/.ssh/id_ed25519"
 [[hosts]]
 name = "tailscale"
 terraform_resource = "tailscale"
-terraform_ip_output = "hosts.tailscale.ip"
+terraform_ip_output = "hosts.tailscale.ips"
 nixos_configuration = "tailscale"
 
 [[hosts]]
 name = "ns1"
 terraform_resource = "ns1"
-terraform_ip_output = "hosts.ns1.ip"
+terraform_ip_output = "hosts.ns1.ips"
 nixos_configuration = "ns1"
 
-#[[hosts]]
-#name = "nix-ct-test-03"
-#terraform_resource = "nix-ct-test-03"
-#terraform_ip_output = "hosts.nix-ct-test-03.ip"
-#nixos_configuration = "nix-ct-test-03"
+[[hosts]]
+name = "ns2"
+terraform_resource = "ns2"
+terraform_ip_output = "hosts.ns2.ips"
+nixos_configuration = "ns2"
+
+[[hosts]]
+name = "karakeep"
+terraform_resource = "karakeep"
+terraform_ip_output = "hosts.karakeep.ips"
+nixos_configuration = "karakeep"

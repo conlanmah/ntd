@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(ls:*)",
-      "WebSearch"
+      "WebSearch",
+      "Read(//home/conlan/**)",
+      "Read(//home/conlan/homelab-repos/**)"
     ]
   }
 }

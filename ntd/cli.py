@@ -1,15 +1,30 @@
 """CLI interface for ntd."""
 
+import re
 import sys
 from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from ntd.config import Config, ConfigError, Host, find_host, load_config, save_config
 from ntd.inventory import get_inventory
-from ntd.nixos import NixOSError, build_configuration, deploy, list_configurations
+from ntd.nixos import (
+    NixOSError,
+    build_configuration,
+    closure_size,
+    deploy,
+    list_configurations,
+)
 from ntd.ssh import wait_for_ssh
 from ntd.terraform import (
     TerraformError,
@@ -23,6 +38,46 @@ from ntd.terraform import (
 )
 
 console = Console()
+
+_TOTAL_RE = re.compile(r"copying (\d+) paths?")
+_ADVANCE_RE = re.compile(r"^copying path '")
+
+
+def _format_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024:
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
+
+
+def _make_copy_progress_handler(progress: Progress, task_id):
+    def handle(line: str) -> None:
+        m = _TOTAL_RE.search(line)
+        if m:
+            progress.update(task_id, total=int(m.group(1)))
+        elif _ADVANCE_RE.match(line):
+            progress.advance(task_id)
+
+    return handle
+
+
+def _copy_progress_columns():
+    return (
+        SpinnerColumn(),
+        TextColumn("[cyan]Copying closure to {task.description}[/cyan]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )
+
+
+def _size_label(store_path: Path) -> str:
+    try:
+        return _format_bytes(closure_size(store_path))
+    except NixOSError:
+        return "unknown size"
 
 
 @click.group()
@@ -424,8 +479,17 @@ def _apply_all(config, skip_terraform: bool, skip_nixos: bool):
                 console.print(f"  [red][{host_config.name}] Build failed: {e}[/red]")
                 sys.exit(1)
 
+            description = f"{host_config.name} ({_size_label(store_path)})"
             try:
-                deploy(store_path, ip, config.ssh_user, config.ssh_key)
+                with Progress(*_copy_progress_columns(), console=console) as progress:
+                    task = progress.add_task(description, total=None)
+                    deploy(
+                        store_path,
+                        ip,
+                        config.ssh_user,
+                        config.ssh_key,
+                        on_copy_progress=_make_copy_progress_handler(progress, task),
+                    )
                 console.print(f"  [green][{host_config.name}] Deployed successfully![/green]")
             except NixOSError as e:
                 console.print(f"  [red][{host_config.name}] Deployment failed: {e}[/red]")
@@ -476,9 +540,17 @@ def _apply_host(config, host: str, skip_terraform: bool, skip_nixos: bool):
         console.print(f"  [red]Build failed: {e}[/red]")
         sys.exit(1)
 
-    console.print(f"\n  Copying closure to {host}...")
+    description = f"{host} ({_size_label(store_path)})"
     try:
-        deploy(store_path, ip, config.ssh_user, config.ssh_key)
+        with Progress(*_copy_progress_columns(), console=console) as progress:
+            task = progress.add_task(description, total=None)
+            deploy(
+                store_path,
+                ip,
+                config.ssh_user,
+                config.ssh_key,
+                on_copy_progress=_make_copy_progress_handler(progress, task),
+            )
         console.print("  [green]Configuration deployed![/green]")
     except NixOSError as e:
         console.print(f"  [red]Deployment failed: {e}[/red]")

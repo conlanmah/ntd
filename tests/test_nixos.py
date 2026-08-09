@@ -9,6 +9,7 @@ from ntd.nixos import (
     NixOSError,
     list_configurations,
     build_configuration,
+    closure_size,
     copy_closure,
     activate_configuration,
     deploy,
@@ -113,6 +114,91 @@ class TestCopyClosure:
             Path("~/.ssh/id_ed25519"),
         )
         mock_run.assert_called_once()
+
+    @patch("subprocess.Popen")
+    def test_streaming_calls_progress_callback(self, mock_popen):
+        lines = [
+            "copying 3 paths...\n",
+            "copying path '/nix/store/aaa' to 'ssh://root@host'\n",
+            "copying path '/nix/store/bbb' to 'ssh://root@host'\n",
+            "copying path '/nix/store/ccc' to 'ssh://root@host'\n",
+        ]
+        proc = MagicMock()
+        proc.stderr = iter(lines)
+        proc.wait.return_value = 0
+        mock_popen.return_value = proc
+
+        received = []
+        copy_closure(
+            Path("/nix/store/abc123"),
+            "192.168.1.100",
+            "root",
+            Path("~/.ssh/id_ed25519"),
+            on_progress=received.append,
+        )
+
+        assert received == lines
+        # Streaming path must invoke `nix copy -v`
+        argv = mock_popen.call_args[0][0]
+        assert "-v" in argv
+
+    @patch("subprocess.Popen")
+    def test_streaming_propagates_error(self, mock_popen):
+        proc = MagicMock()
+        proc.stderr = iter(["error: something broke\n"])
+        proc.wait.return_value = 1
+        mock_popen.return_value = proc
+
+        with pytest.raises(NixOSError, match="something broke"):
+            copy_closure(
+                Path("/nix/store/abc123"),
+                "192.168.1.100",
+                "root",
+                Path("~/.ssh/id_ed25519"),
+                on_progress=lambda line: None,
+            )
+
+    @patch("subprocess.Popen")
+    def test_streaming_command_not_found(self, mock_popen):
+        mock_popen.side_effect = FileNotFoundError()
+        with pytest.raises(NixOSError, match="nix command not found"):
+            copy_closure(
+                Path("/nix/store/abc123"),
+                "192.168.1.100",
+                "root",
+                Path("~/.ssh/id_ed25519"),
+                on_progress=lambda line: None,
+            )
+
+
+class TestClosureSize:
+    @patch("subprocess.run")
+    def test_parses_size(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="/nix/store/xxx\t1234567890\n",
+            returncode=0,
+        )
+        assert closure_size(Path("/nix/store/xxx")) == 1234567890
+
+    @patch("subprocess.run")
+    def test_command_fails(self, mock_run):
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, "nix", stderr="path-info error"
+        )
+        with pytest.raises(NixOSError, match="nix path-info failed"):
+            closure_size(Path("/nix/store/xxx"))
+
+    @patch("subprocess.run")
+    def test_command_not_found(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+        with pytest.raises(NixOSError, match="nix command not found"):
+            closure_size(Path("/nix/store/xxx"))
+
+    @patch("subprocess.run")
+    def test_unparseable_output(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="/nix/store/xxx not-a-number\n", returncode=0)
+        with pytest.raises(NixOSError, match="could not parse"):
+            closure_size(Path("/nix/store/xxx"))
 
 
 class TestActivateConfiguration:

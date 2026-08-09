@@ -87,6 +87,14 @@ class TestGetHostIp:
         outputs = {"count": 42}
         assert get_host_ip(outputs, "count") is None
 
+    def test_list_value_returns_first(self):
+        outputs = {"hosts": {"ns1": {"ips": ["192.168.1.100", "192.168.1.101"]}}}
+        assert get_host_ip(outputs, "hosts.ns1.ips") == "192.168.1.100"
+
+    def test_empty_list_returns_none(self):
+        outputs = {"hosts": {"ns1": {"ips": []}}}
+        assert get_host_ip(outputs, "hosts.ns1.ips") is None
+
 
 class TestListOutputs:
     @patch("ntd.terraform.get_outputs")

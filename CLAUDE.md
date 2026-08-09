@@ -29,6 +29,14 @@ Keep this in mind when trouble shooting path issues
 
 Most commands are not immediately available, you will have to use nix-shell or develop to get python for example.
 
+### Running tests
+
+Use `python3.11` explicitly — the nix shell places python3.11 on PATH but `python` resolves to a different interpreter that lacks the project's packages:
+
+```bash
+nix develop /home/conlan/homelab-repos/ntd --command python3.11 -m pytest tests/ -v
+```
+
 ## Architecture
 
 This is an early-stage project. The flake.nix defines development shells for x86_64 and aarch64 Linux with shared tooling for NixOS deployment workflows.
