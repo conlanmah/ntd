@@ -27,3 +27,9 @@ name = "karakeep"
 terraform_resource = "karakeep"
 terraform_ip_output = "hosts.karakeep.ips"
 nixos_configuration = "karakeep"
+
+[[hosts]]
+name = "miniflux"
+terraform_resource = "miniflux"
+terraform_ip_output = "hosts.miniflux.ips"
+nixos_configuration = "miniflux"
