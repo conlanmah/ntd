@@ -1,11 +1,11 @@
-"""Tests for ntd.inventory module."""
+"""Tests for ntd.status module."""
 
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from ntd.config import Config, Host
-from ntd.inventory import HostStatus, check_reachable, get_inventory
+from ntd.status import HostStatus, check_reachable, get_status
 
 
 class TestHostStatus:
@@ -48,10 +48,10 @@ class TestCheckReachable:
         assert result is False
 
 
-class TestGetInventory:
-    @patch("ntd.inventory.check_reachable")
-    @patch("ntd.inventory.get_host_ip")
-    @patch("ntd.inventory.get_outputs")
+class TestGetStatus:
+    @patch("ntd.status.check_reachable")
+    @patch("ntd.status.get_host_ip")
+    @patch("ntd.status.get_outputs")
     def test_deployed_host(self, mock_outputs, mock_get_ip, mock_reachable):
         mock_outputs.return_value = {"vm1_ip": "192.168.1.100"}
         mock_get_ip.return_value = "192.168.1.100"
@@ -72,14 +72,14 @@ class TestGetInventory:
             ],
         )
 
-        statuses = get_inventory(config)
+        statuses = get_status(config)
         assert len(statuses) == 1
         assert statuses[0].status == "deployed"
         assert statuses[0].ip == "192.168.1.100"
 
-    @patch("ntd.inventory.check_reachable")
-    @patch("ntd.inventory.get_host_ip")
-    @patch("ntd.inventory.get_outputs")
+    @patch("ntd.status.check_reachable")
+    @patch("ntd.status.get_host_ip")
+    @patch("ntd.status.get_outputs")
     def test_unreachable_host(self, mock_outputs, mock_get_ip, mock_reachable):
         mock_outputs.return_value = {"vm1_ip": "192.168.1.100"}
         mock_get_ip.return_value = "192.168.1.100"
@@ -100,12 +100,12 @@ class TestGetInventory:
             ],
         )
 
-        statuses = get_inventory(config)
+        statuses = get_status(config)
         assert len(statuses) == 1
         assert statuses[0].status == "unreachable"
 
-    @patch("ntd.inventory.get_host_ip")
-    @patch("ntd.inventory.get_outputs")
+    @patch("ntd.status.get_host_ip")
+    @patch("ntd.status.get_outputs")
     def test_unknown_ip(self, mock_outputs, mock_get_ip):
         mock_outputs.return_value = {}
         mock_get_ip.return_value = None
@@ -125,12 +125,12 @@ class TestGetInventory:
             ],
         )
 
-        statuses = get_inventory(config)
+        statuses = get_status(config)
         assert len(statuses) == 1
         assert statuses[0].status == "unknown"
         assert statuses[0].ip is None
 
-    @patch("ntd.inventory.get_outputs")
+    @patch("ntd.status.get_outputs")
     def test_terraform_error_handled(self, mock_outputs):
         from ntd.terraform import TerraformError
 
@@ -151,6 +151,6 @@ class TestGetInventory:
             ],
         )
 
-        statuses = get_inventory(config)
+        statuses = get_status(config)
         assert len(statuses) == 1
         assert statuses[0].status == "unknown"

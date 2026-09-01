@@ -59,21 +59,21 @@ class TestCli:
     def test_commands_exist(self, runner):
         result = runner.invoke(cli, ["--help"])
         assert "init" in result.output
-        assert "inventory" in result.output
+        assert "status" in result.output
         assert "plan" in result.output
         assert "apply" in result.output
 
 
-class TestInventoryCommand:
+class TestStatusCommand:
     def test_no_config(self, runner, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["inventory"])
+            result = runner.invoke(cli, ["status"])
             assert result.exit_code == 1
             assert "not found" in result.output or "Error" in result.output
 
-    @patch("ntd.cli.get_inventory")
+    @patch("ntd.cli.get_status")
     @patch("ntd.cli.load_config")
-    def test_inventory_display(self, mock_load, mock_inventory, runner, tmp_path):
+    def test_status_display(self, mock_load, mock_status, runner, tmp_path):
         mock_load.return_value = Config(
             terraform_path=Path("./terraform"),
             nixos_path=Path("."),
@@ -89,9 +89,9 @@ class TestInventoryCommand:
             ],
         )
 
-        from ntd.inventory import HostStatus
+        from ntd.status import HostStatus
 
-        mock_inventory.return_value = [
+        mock_status.return_value = [
             HostStatus(
                 name="vm1",
                 terraform_resource="proxmox_vm.vm1",
@@ -102,7 +102,7 @@ class TestInventoryCommand:
         ]
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(cli, ["inventory"])
+            result = runner.invoke(cli, ["status"])
             assert result.exit_code == 0
             assert "vm1" in result.output
             assert "192.168.1.100" in result.output

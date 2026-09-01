@@ -32,7 +32,7 @@ ntd maintains a lightweight inventory that maps Terraform resources to NixOS con
 └────────┬────────┘         └────────┬────────┘
          │                           │
          │    ┌─────────────────┐    │
-         └───►│  ntd inventory  │◄───┘
+         └───►│   ntd status    │◄───┘
               │                 │
               │  vm1:           │
               │    tf: proxmox  │
@@ -79,12 +79,12 @@ Create mapping? [Y/n]
 Should check for existing ntd.toml and either modify or recreate based on user input.
 
 
-### `ntd inventory`
+### `ntd status`
 
 Shows current state by querying both systems:
 
 ```bash
-$ ntd inventory
+$ ntd status
 HOST      TERRAFORM          NIXOS      IP            STATUS
 vm1       proxmox_vm.vm1     server1    192.168.1.10  deployed
 vm2       proxmox_vm.vm2     server2    192.168.1.11  unreachable
@@ -220,7 +220,7 @@ For users who want deeper integration:
     # Standardized paths ntd expects
     sops.age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
 
-    # Expose metadata for ntd inventory
+    # Expose metadata for ntd status
     environment.etc."ntd/host.json".text = builtins.toJSON {
       name = config.ntd.hostName;
       nixos_version = config.system.nixos.version;
@@ -273,7 +273,7 @@ Benefits:
 
 ### Phase 1: Core CLI ✓
 - `ntd init` - Interactive setup
-- `ntd inventory` - Query TF + NixOS
+- `ntd status` - Query TF + NixOS
 - `ntd plan [host]` - Preview changes (terraform global, NixOS per-host)
 - `ntd apply [host]` - Deploy (terraform global, NixOS per-host)
 - Config file parsing
@@ -310,7 +310,7 @@ ntd init
 # Discovers ./terraform and ./nixos, creates ntd.toml
 
 # Daily operations
-ntd inventory              # See all hosts
+ntd status                 # See all hosts
 ntd plan                   # Preview all changes (terraform + NixOS)
 ntd apply                  # Deploy everything
 ntd plan vm1               # Preview vm1 NixOS config only

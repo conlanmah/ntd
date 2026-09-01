@@ -1,4 +1,4 @@
-"""Inventory management for ntd."""
+"""Status management for ntd."""
 
 import subprocess
 from dataclasses import dataclass
@@ -55,7 +55,7 @@ def check_reachable(ip: str, ssh_user: str, ssh_key: Path, timeout: int = 5) -> 
         return False
 
 
-def get_inventory(config: Config) -> list[HostStatus]:
+def get_status(config: Config) -> list[HostStatus]:
     """Get status information for all configured hosts.
 
     Args:

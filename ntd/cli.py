@@ -17,7 +17,7 @@ from rich.progress import (
 from rich.table import Table
 
 from ntd.config import Config, ConfigError, Host, find_host, load_config, save_config
-from ntd.inventory import get_inventory
+from ntd.status import get_status
 from ntd.nixos import (
     NixOSError,
     build_configuration,
@@ -235,7 +235,7 @@ def init():
 
 
 @cli.command()
-def inventory():
+def status():
     """Show all hosts and their status"""
     try:
         config = load_config()
@@ -248,9 +248,9 @@ def inventory():
         console.print("[yellow]No hosts configured. Run 'ntd init' to add hosts.[/yellow]")
         return
 
-    statuses = get_inventory(config)
+    statuses = get_status(config)
 
-    table = Table(title="Host Inventory")
+    table = Table(title="Host Status")
     table.add_column("Name", style="cyan")
     table.add_column("NixOS Config", style="magenta")
     table.add_column("IP", style="green")
